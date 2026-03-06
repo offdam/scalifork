@@ -45,6 +45,7 @@ var (
 		"baseimage",
 		"ffa/baseimageattr",
 		"vex/filter",
+		"misc/dependencyconfusion",
 	}
 )
 

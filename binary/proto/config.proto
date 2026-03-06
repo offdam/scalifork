@@ -104,12 +104,21 @@ message PluginSpecificConfig {
     SpackConfig spack = 69;
     CsProjConfig csproj = 70;
     NugetCPMConfig nuget_cpm = 71;
+    DependencyConfusionConfig dependency_confusion = 72;
   }
 }
+
 
 message GoBinaryConfig {
   // Enables extracting the module version from the Go binary content.
   bool version_from_content = 1;
+}
+
+message DependencyConfusionConfig {
+  // A list of internal NPM namespaces (e.g. "@mycompany/").
+  repeated string internal_namespaces = 1;
+  // A list of internal NPM packages (e.g. "my-secret-lib").
+  repeated string internal_packages = 2;
 }
 
 message GovulncheckConfig {

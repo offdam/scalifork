@@ -27,6 +27,7 @@ import (
 	"github.com/google/osv-scalibr/enricher/herokuexpiration"
 	"github.com/google/osv-scalibr/enricher/huggingfacemeta"
 	"github.com/google/osv-scalibr/enricher/license"
+	"github.com/google/osv-scalibr/enricher/misc/dependencyconfusion"
 	"github.com/google/osv-scalibr/enricher/packagedeprecation"
 	govcsource "github.com/google/osv-scalibr/enricher/reachability/go/source"
 	"github.com/google/osv-scalibr/enricher/reachability/java"
@@ -221,6 +222,11 @@ var (
 		baseimageattr.Name: {baseimageattr.New},
 	}
 
+	// Misc enrichers.
+	Misc = InitMap{
+		dependencyconfusion.Name: {dependencyconfusion.New},
+	}
+
 	// Default enrichers.
 	Default = concat()
 
@@ -237,6 +243,7 @@ var (
 		TransitiveDependency,
 		PackageDeprecation,
 		FFA,
+		Misc,
 	)
 
 	enricherNames = concat(All, InitMap{
@@ -250,6 +257,7 @@ var (
 		"transitivedependency": vals(TransitiveDependency),
 		"packagedeprecation":   vals(PackageDeprecation),
 		"ffa":                  vals(FFA),
+		"misc":                 vals(Misc),
 
 		"enrichers/default": vals(Default),
 		"default":           vals(Default),

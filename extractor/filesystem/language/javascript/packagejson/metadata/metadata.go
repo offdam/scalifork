@@ -147,6 +147,11 @@ func (m *JavascriptPackageJSONMetadata) SetProto(p *pb.Package) {
 	}
 }
 
+// IsPublicRegistry returns true if the package was sourced from the public registry.
+func (m JavascriptPackageJSONMetadata) IsPublicRegistry() bool {
+	return m.Source == PublicRegistry
+}
+
 // ToStruct converts the JavascriptPackageJSONMetadata proto to a Metadata struct.
 func ToStruct(m *pb.JavascriptPackageJSONMetadata) *JavascriptPackageJSONMetadata {
 	if m == nil {

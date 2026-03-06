@@ -537,7 +537,7 @@ func TestMapNPMProjectRootsToPackages(t *testing.T) {
 		want          map[string][]*extractor.Package
 	}{
 		{
-			name: "maps_root_directory_to_package_from_node_modules/../package.json",
+			name: "maps_root_directory_to_package_from_node_modules",
 			inputPackages: []*extractor.Package{
 				{
 					Name:      "acorn",
@@ -547,28 +547,7 @@ func TestMapNPMProjectRootsToPackages(t *testing.T) {
 				},
 			},
 			want: map[string][]*extractor.Package{
-				"testproject": []*extractor.Package{
-					{
-						Name:      "acorn",
-						Version:   "1.0.0",
-						PURLType:  "npm",
-						Locations: []string{"testproject/node_modules/dependency-1/package.json"},
-					},
-				},
-			},
-		},
-		{
-			name: "maps_root_directory_to_package_from_node_modules/../package.json",
-			inputPackages: []*extractor.Package{
-				{
-					Name:      "acorn",
-					Version:   "1.0.0",
-					PURLType:  "npm",
-					Locations: []string{"testproject/node_modules/dependency-1/package.json"},
-				},
-			},
-			want: map[string][]*extractor.Package{
-				"testproject": []*extractor.Package{
+				"testproject": {
 					{
 						Name:      "acorn",
 						Version:   "1.0.0",
@@ -591,7 +570,7 @@ func TestMapNPMProjectRootsToPackages(t *testing.T) {
 			want: make(map[string][]*extractor.Package),
 		},
 		{
-			name: "no_map_for_non-package.json",
+			name: "allow_non-package.json_if_inside_node_modules",
 			inputPackages: []*extractor.Package{
 				{
 					Name:      "acorn",
@@ -600,7 +579,16 @@ func TestMapNPMProjectRootsToPackages(t *testing.T) {
 					Locations: []string{"testproject/node_modules/dependency-2/package2.json"},
 				},
 			},
-			want: make(map[string][]*extractor.Package),
+			want: map[string][]*extractor.Package{
+				"testproject": {
+					{
+						Name:      "acorn",
+						Version:   "1.0.0",
+						PURLType:  "npm",
+						Locations: []string{"testproject/node_modules/dependency-2/package2.json"},
+					},
+				},
+			},
 		},
 		{
 			name: "no_map_for_non-node_modules_directory",
@@ -736,7 +724,7 @@ func TestResolvedFromLockfile(t *testing.T) {
 			root := setupNPMLockfiles(t, tt.lockfiles)
 			fsys := scalibrfs.DirFS(root)
 
-			got, err := npmsource.ResolvedFromLockfile("testproject", fsys)
+			got, err := npmsource.ResolvedFromLockfile(t.Context(), "testproject", fsys)
 			gotErr := err != nil
 			if gotErr != tt.wantAnyErr {
 				t.Errorf("ResolvedFromLockfile(testproject) error: %v; want error presence = %v", err, tt.wantAnyErr)

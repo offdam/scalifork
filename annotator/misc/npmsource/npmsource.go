@@ -31,6 +31,7 @@ import (
 	"github.com/google/osv-scalibr/annotator"
 	"github.com/google/osv-scalibr/extractor"
 	"github.com/google/osv-scalibr/extractor/filesystem/language/javascript/packagejson/metadata"
+	"github.com/google/osv-scalibr/extractor/filesystem/osv"
 	scalibrfs "github.com/google/osv-scalibr/fs"
 	"github.com/google/osv-scalibr/internal/dependencyfile/packagelockjson"
 	"github.com/google/osv-scalibr/inventory"
@@ -81,6 +82,9 @@ func (a *Annotator) Annotate(ctx context.Context, input *annotator.ScanInput, re
 	rootDirToPackages := MapNPMProjectRootsToPackages(results.Packages)
 	var errs []error
 	for rootDir, pkgs := range rootDirToPackages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		fullPath := rootDir
 		var relError error
 		if filepath.IsAbs(fullPath) {
@@ -90,28 +94,40 @@ func (a *Annotator) Annotate(ctx context.Context, input *annotator.ScanInput, re
 			errs = append(errs, fmt.Errorf("%s failed to get relative path for %q from base %q: %w", a.Name(), fullPath, input.ScanRoot.Path, relError))
 			continue
 		}
-		registryResolvedMap, err := ResolvedFromLockfile(fullPath, input.ScanRoot.FS)
+		registryResolvedMap, err := ResolvedFromLockfile(ctx, fullPath, input.ScanRoot.FS)
 		if err != nil {
 			// If no lockfile is found, we want to annotate the packages as locally published packages.
 			errs = append(errs, fmt.Errorf("%s failed to resolve lockfile in %q: %w", a.Name(), rootDir, err))
 		}
 		for _, pkg := range pkgs {
-			if pkg.Metadata == nil {
-				pkg.Metadata = &metadata.JavascriptPackageJSONMetadata{}
-			}
-			castedMetadata, ok := pkg.Metadata.(*metadata.JavascriptPackageJSONMetadata)
-			if !ok {
-				errs = append(errs, fmt.Errorf("%s expected type *metadata.JavascriptPackageJSONMetadata but got %T for package %q", a.Name(), pkg.Metadata, pkg.Name))
-				continue
-			}
-			if source, ok := registryResolvedMap[pkg.Name]; ok {
-				castedMetadata.Source = source
-			} else {
-				castedMetadata.Source = metadata.Unknown
+			if err := a.annotatePackageSource(pkg, registryResolvedMap); err != nil {
+				errs = append(errs, err)
 			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// MapNPMProjectRootsToPackages maps the root-level directories to packages
+// where they were installed from. Note that only NPM packages from
+// root/node_modules/../package.json are considered.
+func MapNPMProjectRootsToPackages(packages []*extractor.Package) map[string][]*extractor.Package {
+	rootsToPackages := map[string][]*extractor.Package{}
+	for _, pkg := range packages {
+		if len(pkg.Locations) == 0 || pkg.PURLType != purl.TypeNPM {
+			continue
+		}
+
+		for _, loc := range pkg.Locations {
+			root := npmProjectRootDirectory(loc)
+			if root == "" {
+				continue
+			}
+			rootsToPackages[root] = append(rootsToPackages[root], pkg)
+			break
+		}
+	}
+	return rootsToPackages
 }
 
 // ResolvedFromLockfile looks for lockfiles in the given root directory and returns a map of package
@@ -122,15 +138,18 @@ func (a *Annotator) Annotate(ctx context.Context, input *annotator.ScanInput, re
 // 1. /tmp/npm-shrinkwrap.json
 // 2. /tmp/package-lock.json
 // 3. /tmp/node_modules/.package-lock.json
-func ResolvedFromLockfile(root string, fsys scalibrfs.FS) (map[string]metadata.NPMPackageSource, error) {
+func ResolvedFromLockfile(ctx context.Context, root string, fsys scalibrfs.FS) (map[string]metadata.NPMPackageSource, error) {
 	var errs []error
 	for _, lockfile := range lockfilesByPriority {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		lockfilePath := filepath.Join(root, lockfile)
 		if lockfile == ".package-lock.json" {
 			lockfilePath = filepath.Join(root, nodeModulesDirectory, ".package-lock.json")
 		}
 
-		parsedLockfile, err := npmLockfile(filepath.ToSlash(lockfilePath), fsys)
+		parsedLockfile, err := npmLockfile(ctx, filepath.ToSlash(lockfilePath), fsys)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("failed to resolve lockfile: %w", err))
 			continue
@@ -157,6 +176,32 @@ func NPMPackageSource(resolved string) metadata.NPMPackageSource {
 		return metadata.Local
 	}
 	return metadata.Other
+}
+
+func (a *Annotator) annotatePackageSource(pkg *extractor.Package, registryResolvedMap map[string]metadata.NPMPackageSource) error {
+	source := metadata.Unknown
+	if s, ok := registryResolvedMap[pkg.Name]; ok {
+		source = s
+	}
+
+	switch m := pkg.Metadata.(type) {
+	case *metadata.JavascriptPackageJSONMetadata:
+		m.Source = source
+	case osv.DepGroupMetadata:
+		// Packages extracted from lockfiles often have DepGroupMetadata.
+		// We upgrade them to JavascriptPackageJSONMetadata to support source tracking.
+		pkg.Metadata = &metadata.JavascriptPackageJSONMetadata{
+			Source: source,
+		}
+	case nil:
+		pkg.Metadata = &metadata.JavascriptPackageJSONMetadata{
+			Source: source,
+		}
+	default:
+		return fmt.Errorf("%s expected annotatable metadata but got %T for package %q", a.Name(), pkg.Metadata, pkg.Name)
+	}
+
+	return nil
 }
 
 func registryResolvedPackages(lockfile *packagelockjson.LockFile) map[string]metadata.NPMPackageSource {
@@ -225,7 +270,10 @@ func packageName(name string) string {
 	return pkgName
 }
 
-func npmLockfile(lockfile string, fsys scalibrfs.FS) (*packagelockjson.LockFile, error) {
+func npmLockfile(ctx context.Context, lockfile string, fsys scalibrfs.FS) (*packagelockjson.LockFile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	data, err := fs.ReadFile(fsys, lockfile)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -247,34 +295,10 @@ func npmLockfile(lockfile string, fsys scalibrfs.FS) (*packagelockjson.LockFile,
 	return parsedLockfile, nil
 }
 
-// MapNPMProjectRootsToPackages maps the root-level directories to packages where they were installed from.
-// Note that only NPM packages from root/node_modules/../package.json are considered.
-// For example, if package @foo/bar was installed from root/node_modules/foo/bar/package.json,
-// then the map will contain root as the key and package @foo/bar as the value.
-func MapNPMProjectRootsToPackages(packages []*extractor.Package) map[string][]*extractor.Package {
-	rootsToPackages := map[string][]*extractor.Package{}
-	for _, pkg := range packages {
-		if len(pkg.Locations) == 0 || pkg.PURLType != purl.TypeNPM {
-			continue
-		}
-
-		for _, loc := range pkg.Locations {
-			root := npmProjectRootDirectory(loc)
-			if root == "" {
-				continue
-			}
-			rootsToPackages[root] = append(rootsToPackages[root], pkg)
-			break
-		}
-	}
-	return rootsToPackages
-}
-
 func npmProjectRootDirectory(path string) string {
-	// Only consider packages from root/node_modules/../package.json.
-	if !(filepath.Base(path) == "package.json" && strings.Contains(path, nodeModulesDirectory)) {
-		// We are silently dropping packages that are outside of root/node_modules/../package.json.
-		return ""
+	base := filepath.Base(path)
+	if base == "package-lock.json" || base == "npm-shrinkwrap.json" {
+		return filepath.Dir(path)
 	}
 
 	nodeModulesIndex := strings.Index(filepath.ToSlash(path), "/node_modules/")
